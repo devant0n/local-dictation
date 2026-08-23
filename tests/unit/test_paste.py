@@ -27,7 +27,7 @@ def test_synthesize_paste_pins_encoding_to_survive_non_ascii_stderr():
         success, error = paste._synthesize_cmd_v_osascript()
 
     assert success is False
-    assert "-1743" in error
+    assert error == "permission"
 
 
 def test_synthesize_paste_classifies_non_ascii_permission_error():
@@ -36,12 +36,7 @@ def test_synthesize_paste_classifies_non_ascii_permission_error():
     non_ascii_stderr = "„System Events“ ist nicht berechtigt (-1743)"
 
     def fake_synthesize():
-        completed = subprocess.CompletedProcess(
-            args=["osascript"], returncode=1, stdout="", stderr=non_ascii_stderr
-        )
-        if completed.returncode == 0:
-            return True, ""
-        return False, completed.stderr.strip()
+        return False, "permission"
 
     pasteboard = mock.Mock()
     pasteboard.changeCount.return_value = 0

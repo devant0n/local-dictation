@@ -111,24 +111,18 @@ def _synthesize_cmd_v_osascript() -> tuple[bool, str]:
             errors="replace",
             timeout=10,
         )
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
-        log.info("osascript raised %s: %s", type(exc).__name__, exc)
-        return False, str(exc)
-
-    # Log the raw, unfiltered result before any classification -- this is the detail
-    # earlier rounds discarded, collapsing everything into a True/False + best-guess
-    # bucket. Logged at INFO regardless of outcome so a successful run's baseline is also
-    # visible for comparison.
-    log.info(
-        "osascript returncode=%r stdout=%r stderr=%r",
-        result.returncode,
-        result.stdout,
-        result.stderr,
-    )
+    except subprocess.TimeoutExpired:
+        return False, "timeout"
+    except FileNotFoundError:
+        return False, "unavailable"
+    except OSError:
+        return False, "os_error"
 
     if result.returncode == 0:
         return True, ""
-    return False, (result.stderr or "unknown osascript failure").strip()
+    if _is_permission_error(result.stderr or ""):
+        return False, "permission"
+    return False, "failed"
 
 
 def _is_permission_error(message: str) -> bool:
@@ -141,6 +135,8 @@ def paste(
     frontmost_app_at_stop: str | None,
     pasteboard=None,
     synthesize_paste=None,
+    *,
+    recording_id: int | None = None,
 ) -> str:
     """Copy `text` to the clipboard and, if auto-paste is enabled and focus hasn't changed
     since `frontmost_app_at_stop` was captured, attempt to synthesize Cmd+V via System
@@ -162,22 +158,17 @@ def paste(
     pasteboard = pasteboard if pasteboard is not None else _default_pasteboard()
     synthesize_paste = synthesize_paste if synthesize_paste is not None else _synthesize_cmd_v_osascript
 
-    log.info("paste() called: text_len=%d auto_paste=%s", len(text), config.AUTO_PASTE)
+    log.info("paste_started recording_id=%s auto_paste=%s", recording_id, config.AUTO_PASTE)
 
     _write_clipboard_text(pasteboard, text)
 
     if not config.AUTO_PASTE:
-        log.info("paste() -> %s (AUTO_PASTE is False)", SKIPPED_DISABLED)
+        log.info("paste_completed recording_id=%s status=%s", recording_id, SKIPPED_DISABLED)
         return SKIPPED_DISABLED
 
     current_frontmost = frontmost_app_identifier()
     if current_frontmost != frontmost_app_at_stop:
-        log.info(
-            "paste() -> %s (frontmost at stop=%r, frontmost now=%r)",
-            SKIPPED_FOCUS_CHANGED,
-            frontmost_app_at_stop,
-            current_frontmost,
-        )
+        log.info("paste_completed recording_id=%s status=%s", recording_id, SKIPPED_FOCUS_CHANGED)
         return SKIPPED_FOCUS_CHANGED
 
     our_change_count = pasteboard.changeCount()
@@ -188,16 +179,20 @@ def paste(
     # text immediately before firing the paste so the target has the best chance of
     # reading the dictation rather than whatever else showed up.
     if pasteboard.changeCount() != our_change_count:
-        log.info("clipboard changed during settle window, re-asserting dictated text")
+        log.info("paste_clipboard_reasserted recording_id=%s", recording_id)
         _write_clipboard_text(pasteboard, text)
 
-    log.info("attempting synthesize_paste() (frontmost=%r)", current_frontmost)
-    success, error = synthesize_paste()
+    success, error_category = synthesize_paste()
     if success:
-        log.info("paste() -> %s", PASTED)
+        log.info("paste_completed recording_id=%s status=%s", recording_id, PASTED)
         return PASTED
-    if _is_permission_error(error):
-        log.info("paste() -> %s (error=%r)", PASTE_FAILED_PERMISSION, error)
+    if error_category == "permission":
+        log.info("paste_completed recording_id=%s status=%s", recording_id, PASTE_FAILED_PERMISSION)
         return PASTE_FAILED_PERMISSION
-    log.info("paste() -> %s (error=%r)", PASTE_FAILED_OTHER, error)
+    log.info(
+        "paste_completed recording_id=%s status=%s error_category=%s",
+        recording_id,
+        PASTE_FAILED_OTHER,
+        error_category,
+    )
     return PASTE_FAILED_OTHER

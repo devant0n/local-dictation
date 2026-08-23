@@ -2,6 +2,7 @@
 
 import importlib
 import logging
+import logging.handlers
 import sys
 
 import pytest
@@ -87,6 +88,19 @@ def test_root_logger_has_exactly_one_file_and_one_stream_handler(reloaded_config
     ]
     assert len(file_handlers) == 1
     assert len(stream_handlers) == 1
+
+
+def test_file_diagnostics_rotate_at_bounded_size(reloaded_config):
+    file_handlers = [
+        handler
+        for handler in logging.getLogger().handlers
+        if isinstance(handler, logging.handlers.RotatingFileHandler)
+    ]
+    assert len(file_handlers) == 1
+    assert reloaded_config.LOG_MAX_BYTES == 1 * 1024 * 1024
+    assert reloaded_config.LOG_BACKUP_COUNT == 2
+    assert file_handlers[0].maxBytes == reloaded_config.LOG_MAX_BYTES
+    assert file_handlers[0].backupCount == reloaded_config.LOG_BACKUP_COUNT
 
 
 def test_console_handler_targets_stderr_not_stdout(reloaded_config):

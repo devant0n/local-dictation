@@ -57,10 +57,11 @@ def test_submit_enqueues_audio():
     w.submit(audio, "frontmost_app")
 
     # Queue should have one item
-    audio_out, app_out, retry_count = w._queue.get_nowait()
+    audio_out, app_out, retry_count, recording_id = w._queue.get_nowait()
     np.testing.assert_array_equal(audio, audio_out)
     assert app_out == "frontmost_app"
     assert retry_count == 0
+    assert recording_id is None
 
 
 def test_submit_with_none_frontmost_app():
@@ -69,9 +70,10 @@ def test_submit_with_none_frontmost_app():
     audio = np.zeros((1000,), dtype=np.float32)
     w.submit(audio, None)
 
-    audio_out, app_out, retry_count = w._queue.get_nowait()
+    audio_out, app_out, retry_count, recording_id = w._queue.get_nowait()
     assert app_out is None
     assert retry_count == 0
+    assert recording_id is None
 
 
 def test_warm_up_idempotent():
@@ -239,6 +241,19 @@ def test_worker_retries_once_and_retains_failed_audio():
     assert w.retry_failed()
     assert w.has_pending()
     assert w.discard_failed() is False
+
+
+def test_failed_transcription_log_is_sanitized_and_correlated(caplog):
+    w = TranscriptionWorker()
+    w._warmed_up = True
+    with mock.patch("local_dictation.worker.transcribe_full", side_effect=RuntimeError("secret /path")), \
+         caplog.at_level(logging.INFO, logger="local_dictation.worker"):
+        w.submit(np.ones(1000, dtype=np.float32), None, recording_id=7)
+        w.process_pending()
+
+    messages = [record.message for record in caplog.records]
+    assert any("recording_id=7" in message for message in messages)
+    assert all("secret" not in message and "/path" not in message for message in messages)
 
 
 def test_worker_transcribes_retried_audio_successfully():

@@ -54,8 +54,8 @@ class TranscriptionWorker:
         self.on_rejected = on_rejected
         self.on_reloading = on_reloading  # Called before model reload due to idle unload
         self.on_failure = on_failure
-        self._queue: "queue.Queue[tuple[np.ndarray, str | None, int]]" = queue.Queue()
-        self._failed: list[tuple[np.ndarray, str | None]] = []
+        self._queue: "queue.Queue[tuple[np.ndarray, str | None, int, int | None]]" = queue.Queue()
+        self._failed: list[tuple[np.ndarray, str | None, int | None]] = []
         self._warmed_up = False
         self._is_processing = False
 
@@ -72,21 +72,32 @@ class TranscriptionWorker:
         self._warmed_up = True
         log.info("model ready in %.1fs", time.monotonic() - started)
 
-    def unload(self) -> None:
+    def unload(self) -> bool:
         """Unload the model from memory to reduce idle footprint."""
         if not self._warmed_up:
-            return
+            return False
         unload_model()
         self._warmed_up = False
+        return True
 
-    def submit(self, audio: np.ndarray, frontmost_app_at_stop: str | None = None) -> None:
+    def submit(
+        self,
+        audio: np.ndarray,
+        frontmost_app_at_stop: str | None = None,
+        recording_id: int | None = None,
+    ) -> None:
         """Enqueue a captured clip for transcription. Thread-safe; never blocks.
 
         `frontmost_app_at_stop` is the app that was focused the moment recording stopped
         (see paste.frontmost_app_identifier()); it's used for the focus-changed paste
         guard once this clip's transcription is ready.
         """
-        self._queue.put((audio, frontmost_app_at_stop, 0))
+        self._queue.put((audio, frontmost_app_at_stop, 0, recording_id))
+        log.info(
+            "transcription_queued recording_id=%s queue_depth=%d",
+            recording_id,
+            self._queue.qsize(),
+        )
 
     def is_processing(self) -> bool:
         """Return whether a transcription is currently in progress."""
@@ -101,8 +112,9 @@ class TranscriptionWorker:
     def retry_failed(self) -> bool:
         if not self._failed:
             return False
-        audio, frontmost = self._failed.pop(0)
-        self._queue.put((audio, frontmost, 0))
+        audio, frontmost, recording_id = self._failed.pop(0)
+        self._queue.put((audio, frontmost, 0, recording_id))
+        log.info("transcription_retry_requested recording_id=%s", recording_id)
         return True
 
     def discard_failed(self) -> bool:
@@ -114,14 +126,20 @@ class TranscriptionWorker:
     def process_pending(self) -> None:
         """Process one queued clip, if any is waiting. Call repeatedly from one thread."""
         try:
-            audio, frontmost_app_at_stop, retry_count = self._queue.get_nowait()
+            audio, frontmost_app_at_stop, retry_count, recording_id = self._queue.get_nowait()
         except queue.Empty:
             return
-        self._process(audio, frontmost_app_at_stop, retry_count)
+        self._process(audio, frontmost_app_at_stop, retry_count, recording_id)
 
     def _process(self, audio: np.ndarray, frontmost_app_at_stop: str | None,
-                 retry_count: int = 0) -> None:
+                 retry_count: int = 0, recording_id: int | None = None) -> None:
         self._is_processing = True
+        started = time.monotonic()
+        log.info(
+            "transcription_started recording_id=%s attempt=%d",
+            recording_id,
+            retry_count + 1,
+        )
         try:
             # If model was unloaded (after idle timeout), reload it with a UI cue
             if not self._warmed_up:
@@ -136,23 +154,40 @@ class TranscriptionWorker:
 
             text = filters.accepted_text(audio, result)
             if text is None:
+                log.info("transcription_rejected recording_id=%s", recording_id)
                 if self.on_rejected:
                     self.on_rejected()
                 return
 
             language = result["language"]
-            paste_status = paste.paste(text, frontmost_app_at_stop)
+            paste_status = paste.paste(text, frontmost_app_at_stop, recording_id=recording_id)
+            log.info(
+                "transcription_completed recording_id=%s language=%s elapsed_seconds=%.3f paste_status=%s",
+                recording_id,
+                language,
+                time.monotonic() - started,
+                paste_status,
+            )
 
             if self.on_result:
                 self.on_result(language, text, paste_status)
         except Exception as error:
             if retry_count == 0:
-                log.exception("Transcription failed; retrying once")
-                self._process(audio, frontmost_app_at_stop, retry_count=1)
+                log.warning(
+                    "transcription_failed recording_id=%s attempt=1 error_type=%s retrying=true",
+                    recording_id,
+                    type(error).__name__,
+                )
+                self._process(audio, frontmost_app_at_stop, retry_count=1, recording_id=recording_id)
             else:
-                log.exception("Transcription failed after retry")
-                self._failed.append((audio, frontmost_app_at_stop))
+                log.warning(
+                    "transcription_failed recording_id=%s attempt=%d error_type=%s retained=true",
+                    recording_id,
+                    retry_count + 1,
+                    type(error).__name__,
+                )
+                self._failed.append((audio, frontmost_app_at_stop, recording_id))
                 if self.on_failure:
-                    self.on_failure(str(error))
+                    self.on_failure(type(error).__name__)
         finally:
             self._is_processing = False

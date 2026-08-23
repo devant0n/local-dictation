@@ -48,12 +48,15 @@ that doesn't drift from unrelated system changes, so Activity Monitor and permis
   from the venv. Convenient while iterating, but the process appears as the underlying Python
   interpreter to Activity Monitor and TCC — use the app bundle for everyday use. Press the trigger
   combo to start recording (icon turns 🔴; mic is only active while recording), press it again to
-  stop — the clip is transcribed and, if a text field is focused, pasted automatically. A
+  stop — or use **Stop Recording** from the menu if the hotkey is unavailable. The clip is
+  transcribed and, if a text field is focused, pasted automatically. A
   notification shows the detected language and a preview. While transcribing, the icon shows an
   hourglass; if processing fails twice, the recording is retained and the menu offers **Retry
   Failed Dictation** or **Discard Failed Dictation**. **Copy Last Dictation** recovers the most
-  recent transcription at any time. A live **Status** line shows Input Monitoring state and the
-  outcome of the last paste attempt.
+  recent transcription at any time. A live **Status** line shows Input Monitoring state, any
+  hotkey-loss interruption, and the outcome of the last paste attempt. If macOS disables the
+  event tap while recording, local-dictation stops the recording immediately and transcribes the
+  captured portion rather than leaving the microphone active.
 - **CLI, fixed-duration recording:** `local-dictation-dictate [seconds]` (default 5s) — records,
   transcribes, copies the result to the clipboard. Simplest way to test the raw pipeline.
 
@@ -103,6 +106,11 @@ All tunables live in `config.py` — no code changes needed elsewhere:
 | `MODEL` | `whisper-large-v3-turbo` | mlx-whisper model repo |
 | `MAX_RECORDING_SECONDS` | `300` | Safety cap for one recording |
 | `IDLE_TIMEOUT_MINUTES` | — | Unload model memory after inactivity; `0` disables |
+
+Diagnostics are written to `~/Library/Logs/local-dictation/local-dictation.log` (or
+`LOCAL_DICTATION_LOG_DIR`) and mirrored to stderr. They rotate at 1 MiB with two backups (3 MiB
+total), correlate one recording's capture/transcription/paste lifecycle, and never include dictated
+text, clipboard content, raw audio, raw OS command output, exception tracebacks, or executable paths.
 
 Debounce and guard thresholds (`COMBO_DEBOUNCE_SECONDS`, `MIN_RECORDING_SECONDS`,
 `RMS_SILENCE_THRESHOLD`, `NO_SPEECH_PROB_THRESHOLD`, `AVG_LOGPROB_THRESHOLD`,
