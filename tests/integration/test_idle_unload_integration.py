@@ -35,20 +35,18 @@ class TestIdleUnloadIntegration(unittest.TestCase):
 
         # Mock transcribe_full and filters to test reload behavior
         with patch('local_dictation.worker.transcribe_full') as mock_transcribe, \
-             patch('local_dictation.worker.filters.accepted_text') as mock_accepted_text, \
              patch('local_dictation.worker.paste.paste') as mock_paste, \
              patch.object(w, 'warm_up') as mock_warmup:
 
             mock_transcribe.return_value = {
                 'language': 'en',
-                'text': 'test',
-                'segments': []
+                'segments': [{'text': 'test', 'no_speech_prob': 0.01,
+                              'avg_logprob': -0.1, 'compression_ratio': 1.0}]
             }
-            mock_accepted_text.return_value = 'test'
             mock_paste.return_value = 'PASTED'
 
             # Submit audio
-            audio = np.zeros((1000,), dtype=np.float32)
+            audio = np.ones(16_000, dtype=np.float32) * 0.5
             w.submit(audio, None)
 
             # Process should trigger reload callback and warm_up
@@ -93,24 +91,22 @@ class TestIdleUnloadIntegration(unittest.TestCase):
         w._warmed_up = False  # Model unloaded
 
         with patch('local_dictation.worker.transcribe_full') as mock_transcribe, \
-             patch('local_dictation.worker.filters.accepted_text') as mock_accepted_text, \
              patch('local_dictation.worker.paste.paste') as mock_paste, \
              patch.object(w, 'warm_up') as mock_warmup:
 
             result = {
                 'language': 'de',
-                'text': 'Hallo Welt mit Umlauten: äöü ß',
-                'segments': []
+                'segments': [{'text': 'Hallo Welt mit Umlauten: äöü ß', 'no_speech_prob': 0.01,
+                              'avg_logprob': -0.1, 'compression_ratio': 1.0}]
             }
             mock_transcribe.return_value = result
-            mock_accepted_text.return_value = 'Hallo Welt mit Umlauten: äöü ß'
             mock_paste.return_value = 'PASTED'
 
             on_result_callback = MagicMock()
             w.on_result = on_result_callback
 
             # Submit and process
-            audio = np.zeros((1000,), dtype=np.float32)
+            audio = np.ones(16_000, dtype=np.float32) * 0.5
             w.submit(audio, 'SomeApp')
             w.process_pending()
 

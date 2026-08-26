@@ -65,13 +65,16 @@ class DictationApp(rumps.App):
         self._flash_timer: rumps.Timer | None = None
         self._idle_timer: rumps.Timer | None = None
         self._last_activity_time: float = 0  # timestamp of last transcription submit
+        self._last_hotkey_issue: str | None = None
+        self._last_outcome_issue: str | None = None
         self.hud = Hud()
 
         self.status_item = rumps.MenuItem("Status: starting…")
         self.copy_last_item = rumps.MenuItem("Copy Last Dictation", callback=self._copy_last_dictation)
+        self.stop_recording_item = rumps.MenuItem("Stop Recording", callback=self._stop_recording)
         self.retry_failed_item = rumps.MenuItem("Retry Failed Dictation", callback=self._retry_failed)
         self.discard_failed_item = rumps.MenuItem("Discard Failed Dictation", callback=self._discard_failed)
-        self.menu = [self.status_item, self.copy_last_item, self.retry_failed_item,
+        self.menu = [self.status_item, self.copy_last_item, self.stop_recording_item, self.retry_failed_item,
                      self.discard_failed_item, rumps.MenuItem("Quit")]
 
         self.worker = TranscriptionWorker(
@@ -82,38 +85,88 @@ class DictationApp(rumps.App):
             on_failure=self._on_failure,
         )
 
-        # DictationController's start/stop callbacks fire on the trigger's own thread (see
-        # trigger.py), so they must be marshaled to the main thread via AppHelper.callAfter.
-        # _on_result/_on_rejected, by contrast, are called from worker.process_pending(),
-        # which _poll_worker below already drives on the main thread -- no marshaling
-        # needed there.
+        # The trigger's event-tap thread only schedules these actions. All recording state and
+        # microphone work runs on the Cocoa main thread, as does worker.process_pending().
         self.controller = DictationController(
-            on_recording_start=lambda: AppHelper.callAfter(self._on_recording_start),
-            on_recording_stop=lambda: AppHelper.callAfter(self._on_recording_stop),
+            on_recording_start=self._on_recording_start,
+            on_recording_stop=self._on_recording_stop,
             on_clip_ready=self._on_clip_ready,
+            on_capture_failure=self._on_capture_failure,
+            control_dispatch=lambda callback: AppHelper.callAfter(callback),
         )
-        self.trigger = create_trigger(on_toggle=self.controller.toggle)
+        self.trigger = create_trigger(
+            on_toggle=self._dispatch_hotkey_toggle,
+            on_tap_disabled=self._dispatch_tap_disabled,
+            on_tap_reenabled=self._dispatch_tap_reenabled,
+        )
+        self._set_stop_recording_enabled(False)
 
-    def _on_clip_ready(self, audio) -> None:
-        # Runs on the trigger's thread, right when recording stops -- capture the
-        # frontmost app now, since that's the moment the focus-changed paste guard cares
-        # about.
+    def _dispatch_hotkey_toggle(self) -> None:
+        """Schedule control work and return immediately to Quartz's event-tap callback."""
+        AppHelper.callAfter(self._handle_hotkey_toggle)
+
+    def _dispatch_tap_disabled(self, reason: str) -> None:
+        """Schedule fail-safe recovery without doing UI or microphone work in Quartz."""
+        AppHelper.callAfter(self._handle_tap_disabled, reason)
+
+    def _dispatch_tap_reenabled(self, reason: str) -> None:
+        AppHelper.callAfter(self._handle_tap_reenabled, reason)
+
+    def _handle_hotkey_toggle(self) -> None:
+        self._last_hotkey_issue = None
+        log.info("hotkey_toggle_dispatched")
+        self.controller.toggle()
+        self._show_steady_state()
+
+    def _handle_tap_disabled(self, reason: str) -> None:
+        log.warning("event_tap_disabled reason=%s", reason)
+        self._last_hotkey_issue = "recording stopped — hotkey unavailable"
+        if self.controller.stop("hotkey_unavailable"):
+            rumps.notification(
+                title="local-dictation",
+                subtitle="Recording stopped",
+                message="The global hotkey became unavailable. The captured clip is being transcribed.",
+            )
+        self._show_steady_state()
+
+    def _handle_tap_reenabled(self, reason: str) -> None:
+        log.info("event_tap_reenabled reason=%s", reason)
+
+    def _on_clip_ready(self, audio, recording_id: int, reason: str) -> None:
         frontmost = paste.frontmost_app_identifier()
-        self.worker.submit(audio, frontmost)
+        self.worker.submit(audio, frontmost, recording_id)
         self._reset_idle_timer()
-        AppHelper.callAfter(self._show_steady_state)
+        log.info("recording_queued recording_id=%d reason=%s", recording_id, reason)
+        self._show_steady_state()
 
-    def _on_recording_start(self) -> None:
+    def _on_recording_start(self, _recording_id: int) -> None:
+        self._last_outcome_issue = None
         self._cancel_flash()
         self.title = RECORDING_ICON
+        self._set_stop_recording_enabled(True)
 
-    def _on_recording_stop(self) -> None:
+    def _on_recording_stop(self, _recording_id: int, _reason: str) -> None:
+        self._set_stop_recording_enabled(False)
         self._show_steady_state()
+
+    def _on_capture_failure(self, _recording_id: int, stage: str, _error_type: str) -> None:
+        self._last_outcome_issue = f"capture {stage} failed"
+        self._show_steady_state()
+
+    def _set_stop_recording_enabled(self, enabled: bool) -> None:
+        native_item = getattr(self.stop_recording_item, "_menuitem", None)
+        if native_item is not None:
+            native_item.setEnabled_(enabled)
+
+    def _stop_recording(self, _sender) -> None:
+        if self.controller.stop("menu"):
+            self._show_steady_state()
 
     def _on_transcribing(self) -> None:
         self._show_steady_state()
 
     def _show_steady_state(self) -> None:
+        self._set_stop_recording_enabled(self.controller.recording)
         if self.controller.recording:
             self.title = RECORDING_ICON
         elif self.worker.has_pending():
@@ -160,10 +213,11 @@ class DictationApp(rumps.App):
             return
 
         elapsed_minutes = (time.time() - self._last_activity_time) / 60.0
-        if elapsed_minutes >= config.IDLE_TIMEOUT_MINUTES:
-            # Timeout has elapsed; unload the model
-            log.info("Idle timeout reached (%.1f minutes), unloading model", elapsed_minutes)
-            self.worker.unload()
+        if elapsed_minutes >= config.IDLE_TIMEOUT_MINUTES and self.worker.unload():
+            log.info("idle_unload_completed elapsed_minutes=%.1f", elapsed_minutes)
+            if self._idle_timer is not None:
+                self._idle_timer.stop()
+                self._idle_timer = None
 
     def _on_result(self, language: str, text: str, paste_status: str) -> None:
         self.last_transcription = text
@@ -202,13 +256,15 @@ class DictationApp(rumps.App):
                 message="Your dictation is on the clipboard; paste it manually.",
             )
 
-    def _on_rejected(self) -> None:
+    def _on_rejected(self, reason: str) -> None:
         # Frequent (accidental/short toggles), not actionable beyond "try again" -- a
         # flash is enough, a notification would be disproportionate.
+        self._last_outcome_issue = f"dictation rejected — {reason}"
         self._flash(NO_SPEECH_ICON)
         self._reset_idle_timer()
 
-    def _on_failure(self, error: str) -> None:
+    def _on_failure(self, stage: str, _error_type: str) -> None:
+        self._last_outcome_issue = f"transcription {stage} failed"
         self._show_steady_state()
         rumps.notification(title="local-dictation", subtitle="Transcription failed",
                            message="Retry or discard the retained recording from the menu.")
@@ -262,6 +318,10 @@ class DictationApp(rumps.App):
             self.status_item.title = "Status: grant Input Monitoring (trigger off)"
         elif self.worker.failed_count():
             self.status_item.title = "Status: transcription failed — retry available"
+        elif self._last_outcome_issue is not None:
+            self.status_item.title = f"Status: {self._last_outcome_issue}"
+        elif self._last_hotkey_issue is not None:
+            self.status_item.title = f"Status: {self._last_hotkey_issue}"
         elif self.last_paste_status is None:
             self.status_item.title = "Status: ready"
         elif self.last_paste_status in _NOT_PASTED:
@@ -270,15 +330,16 @@ class DictationApp(rumps.App):
             self.status_item.title = "Status: OK"
 
     def run(self):
-        # Diagnostic: which exact interpreter identity is running (TCC ties permission
-        # grants to code identity, and that identity has already proven unstable once for
-        # a bare venv Python interpreter -- see design.md's Round 4). accessibility_trusted
-        # is logged for reference only; it's not used to gate anything.
-        real_executable = os.path.realpath(sys.executable)
-        log.info("startup: sys.executable=%r resolved=%r", sys.executable, real_executable)
-        log.info("startup: accessibility_trusted()=%s", paste.accessibility_trusted())
+        # TCC depends on process identity, but diagnostics retain only the executable name rather
+        # than a user-specific path. Accessibility is a reference diagnostic, not a gate.
+        log.info(
+            "startup executable_name=%r accessibility_trusted=%s",
+            os.path.basename(sys.executable),
+            paste.accessibility_trusted(),
+        )
 
         self.worker.warm_up()
+        self._reset_idle_timer()
         self.trigger.start()
         log.info("trigger armed (%s)", config.TRIGGER)
 

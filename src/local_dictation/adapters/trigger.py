@@ -22,17 +22,22 @@ a character, so there is nothing to consume.
 
 import threading
 import time
+import logging
 
 import Quartz
 
 from local_dictation import config
 
+log = logging.getLogger(__name__)
+
 
 class FnTapTrigger:
     """Watches for a bare Fn key tap and calls on_toggle() for each valid tap."""
 
-    def __init__(self, on_toggle):
+    def __init__(self, on_toggle, on_tap_disabled=None, on_tap_reenabled=None):
         self.on_toggle = on_toggle
+        self.on_tap_disabled = on_tap_disabled
+        self.on_tap_reenabled = on_tap_reenabled
         self._thread: threading.Thread | None = None
         self._run_loop = None
         self._tap = None
@@ -41,8 +46,14 @@ class FnTapTrigger:
         self._last_toggle_at = 0.0
 
     def start(self) -> None:
-        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread = threading.Thread(target=self._run_guarded, daemon=True)
         self._thread.start()
+
+    def _run_guarded(self) -> None:
+        try:
+            self._run()
+        except Exception as error:
+            log.warning("trigger_runtime_failed backend=fn error_type=%s", type(error).__name__)
 
     def stop(self) -> None:
         if self._run_loop is not None:
@@ -83,7 +94,16 @@ class FnTapTrigger:
         ):
             # macOS disabled the tap (e.g. it was too slow, or the user toggled
             # accessibility settings); re-enable it so the toggle keeps working.
+            reason = (
+                "timeout"
+                if event_type == Quartz.kCGEventTapDisabledByTimeout
+                else "user_input"
+            )
+            if self.on_tap_disabled is not None:
+                self.on_tap_disabled(reason)
             Quartz.CGEventTapEnable(self._tap, True)
+            if self.on_tap_reenabled is not None:
+                self.on_tap_reenabled(reason)
             return event
 
         if event_type == Quartz.kCGEventKeyDown:
@@ -139,8 +159,11 @@ class ComboTrigger:
     """Toggles on a configured modifier+key combo. No bare-tap discrimination needed --
     a multi-key chord is unambiguous the instant it's pressed."""
 
-    def __init__(self, on_toggle, key: str, modifiers: set[str]):
+    def __init__(self, on_toggle, key: str, modifiers: set[str], on_tap_disabled=None,
+                 on_tap_reenabled=None):
         self.on_toggle = on_toggle
+        self.on_tap_disabled = on_tap_disabled
+        self.on_tap_reenabled = on_tap_reenabled
         try:
             self._target_keycode = _KEYCODES[key.lower()]
         except KeyError:
@@ -160,8 +183,14 @@ class ComboTrigger:
         self._last_toggle_at = 0.0
 
     def start(self) -> None:
-        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread = threading.Thread(target=self._run_guarded, daemon=True)
         self._thread.start()
+
+    def _run_guarded(self) -> None:
+        try:
+            self._run()
+        except Exception as error:
+            log.warning("trigger_runtime_failed backend=combo error_type=%s", type(error).__name__)
 
     def stop(self) -> None:
         if self._run_loop is not None:
@@ -198,7 +227,16 @@ class ComboTrigger:
             Quartz.kCGEventTapDisabledByTimeout,
             Quartz.kCGEventTapDisabledByUserInput,
         ):
+            reason = (
+                "timeout"
+                if event_type == Quartz.kCGEventTapDisabledByTimeout
+                else "user_input"
+            )
+            if self.on_tap_disabled is not None:
+                self.on_tap_disabled(reason)
             Quartz.CGEventTapEnable(self._tap, True)
+            if self.on_tap_reenabled is not None:
+                self.on_tap_reenabled(reason)
             return event
 
         if event_type == Quartz.kCGEventKeyDown:
@@ -232,10 +270,13 @@ class ComboTrigger:
             self.on_toggle()
 
 
-def create_trigger(on_toggle):
+def create_trigger(on_toggle, on_tap_disabled=None, on_tap_reenabled=None):
     """Instantiate whichever trigger backend config.TRIGGER selects."""
     if config.TRIGGER == "combo":
-        return ComboTrigger(on_toggle, config.TRIGGER_KEY, config.TRIGGER_MODIFIERS)
+        return ComboTrigger(
+            on_toggle, config.TRIGGER_KEY, config.TRIGGER_MODIFIERS, on_tap_disabled,
+            on_tap_reenabled
+        )
     if config.TRIGGER == "fn":
-        return FnTapTrigger(on_toggle)
+        return FnTapTrigger(on_toggle, on_tap_disabled, on_tap_reenabled)
     raise ValueError(f"Unknown config.TRIGGER {config.TRIGGER!r}; expected 'combo' or 'fn'")

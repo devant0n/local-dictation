@@ -146,3 +146,18 @@ rejected by confidence guards.
 - **WHEN** a long recording contains accepted speech segments and one segment rejected by a
   confidence guard
 - **THEN** the accepted speech is delivered and the recording is not discarded as a whole
+
+### Requirement: Serialized recording finalization
+The system SHALL serialize hotkey, menu, duration-cap, and hotkey-loss stop requests so an active recording is finalized at most once. Every successful stop source SHALL close the microphone and submit the captured clip through the same transcription handoff.
+
+#### Scenario: Concurrent stop sources
+- **WHEN** two stop requests arrive for the same active recording
+- **THEN** only the first request finalizes and submits the recording, and the later request has no effect on the microphone, clip, or transcription queue
+
+#### Scenario: Hotkey-loss stop
+- **WHEN** the event tap becomes unavailable while recording
+- **THEN** the system closes the microphone and hands off the captured clip without waiting for the maximum recording duration
+
+#### Scenario: Capture finalization fails
+- **WHEN** microphone finalization or clip handoff raises an error
+- **THEN** the recording ends without retrying microphone work, the app reports a capture failure state, and the diagnostic log records the sanitized failure stage and error type

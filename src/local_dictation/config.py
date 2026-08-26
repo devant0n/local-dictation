@@ -4,6 +4,7 @@ import logging
 import os
 import sys
 import threading
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 import tqdm
@@ -21,9 +22,19 @@ os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
 LOG_DIR = Path(os.environ.get("LOCAL_DICTATION_LOG_DIR", "~/Library/Logs/local-dictation")).expanduser()
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 LOG_FILE = LOG_DIR / "local-dictation.log"
+LOG_MAX_BYTES = 1 * 1024 * 1024
+LOG_BACKUP_COUNT = 2
 LOG_LEVEL = getattr(logging, os.environ.get("LOCAL_DICTATION_LOG_LEVEL", "INFO").upper(), logging.INFO)
 logging.basicConfig(
-    handlers=[logging.FileHandler(LOG_FILE), logging.StreamHandler(sys.stderr)],
+    handlers=[
+        RotatingFileHandler(
+            LOG_FILE,
+            maxBytes=LOG_MAX_BYTES,
+            backupCount=LOG_BACKUP_COUNT,
+            encoding="utf-8",
+        ),
+        logging.StreamHandler(sys.stderr),
+    ],
     level=LOG_LEVEL,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     force=True,
