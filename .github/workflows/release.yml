@@ -2,12 +2,20 @@ name: Release
 on:
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Run Semantic Release without writing repository state
+        required: false
+        type: boolean
+        default: true
 permissions:
   contents: write
   id-token: write
 jobs:
   release:
     if: >-
+      github.event_name == 'workflow_dispatch' ||
       startsWith(github.event.head_commit.message, 'feat') ||
       startsWith(github.event.head_commit.message, 'fix')
     runs-on: ubuntu-latest
@@ -16,9 +24,17 @@ jobs:
         with:
           fetch-depth: 0
           token: ${{ secrets.RELEASE_PAT }}
+      - uses: astral-sh/setup-uv@v7
+      - name: Install Python 3.13
+        run: uv python install 3.13
+      - name: Install locked release environment
+        run: uv sync --extra dev --locked
       - name: Python Semantic Release
-        uses: python-semantic-release/python-semantic-release@v10.6.1
-        with:
-          github_token: ${{ secrets.RELEASE_PAT }}
-          git_committer_name: "github-actions"
-          git_committer_email: "actions@users.noreply.github.com"
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PAT }}
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.dry_run }}" == "true" ]]; then
+            uv run semantic-release --noop version --no-push --no-vcs-release
+          else
+            uv run semantic-release version
+          fi
