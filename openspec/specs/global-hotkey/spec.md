@@ -69,4 +69,3 @@ kept working throughout a period when Accessibility was not yet granted.
 - **WHEN** the user revokes Input Monitoring permission while the app is running
 - **THEN** the app does not crash, and the permission state is reflected in the menu bar
   (see the menu-bar-app capability)
-
