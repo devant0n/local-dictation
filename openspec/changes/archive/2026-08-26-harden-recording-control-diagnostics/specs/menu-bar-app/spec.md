@@ -1,7 +1,7 @@
 ## MODIFIED Requirements
 
 ### Requirement: Status line in menu
-The system SHALL surface a live status line reflecting Input Monitoring state, a hotkey-loss interruption affecting the current or most recent recording, and the outcome of the most recent paste attempt. There is no reliable way to check paste permission ahead of time, so the status reflects the last real attempt rather than a prediction.
+The system SHALL surface a live status line reflecting Input Monitoring state, a hotkey-loss interruption affecting the current or most recent recording, the latest capture or transcription non-success outcome, and the outcome of the most recent paste attempt. There is no reliable way to check paste permission ahead of time, so the status reflects the last real attempt rather than a prediction.
 
 #### Scenario: Input Monitoring not granted
 - **WHEN** Input Monitoring is not granted or has been revoked
@@ -10,6 +10,10 @@ The system SHALL surface a live status line reflecting Input Monitoring state, a
 #### Scenario: Hotkey loss stops a recording
 - **WHEN** the event tap becomes unavailable while recording
 - **THEN** the status line reports that recording was stopped because the hotkey became unavailable
+
+#### Scenario: Capture or transcription is not successful
+- **WHEN** a capture finalization fails or a dictation is rejected
+- **THEN** the status line reports the latest content-free failure or rejection category
 
 #### Scenario: Last paste attempt failed
 - **WHEN** the most recent dictation's paste attempt did not succeed
