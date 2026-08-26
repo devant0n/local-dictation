@@ -32,11 +32,18 @@ class Recorder:
         self._recording = False
         self._max_duration_timer: threading.Timer | None = None
         self._on_max_duration_reached = None
+        self._callback_count = 0
+        self._stream_status_flags: set[str] = set()
+        self.last_capture_diagnostics = {"callback_count": 0, "stream_status_flags": ()}
 
     def _callback(self, indata, frames, time_info, status) -> None:
         chunk = indata.copy().reshape(-1)
         with self._lock:
             self._chunks.append(chunk)
+            self._callback_count += 1
+            for name in ("input_overflow", "input_underflow", "output_overflow", "output_underflow"):
+                if getattr(status, name, False):
+                    self._stream_status_flags.add(name)
 
     def start(self, on_max_duration_reached=None) -> None:
         """Open the microphone and begin a recording window."""
@@ -45,6 +52,8 @@ class Recorder:
 
         with self._lock:
             self._chunks = []
+            self._callback_count = 0
+            self._stream_status_flags = set()
 
         self._stream = sd.InputStream(
             samplerate=SAMPLE_RATE,
@@ -91,6 +100,10 @@ class Recorder:
         with self._lock:
             chunks = self._chunks
             self._chunks = []
+            self.last_capture_diagnostics = {
+                "callback_count": self._callback_count,
+                "stream_status_flags": tuple(sorted(self._stream_status_flags)),
+            }
 
         if not chunks:
             return np.zeros(0, dtype=np.float32)

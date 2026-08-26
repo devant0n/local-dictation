@@ -42,3 +42,19 @@ def test_tap_loss_stops_active_recording_once_and_surfaces_feedback():
     notification.assert_called_once()
     app._show_steady_state.assert_called_once()
     assert app._last_hotkey_issue == "recording stopped — hotkey unavailable"
+
+
+def test_status_surfaces_the_latest_capture_or_filter_outcome():
+    app = object.__new__(DictationApp)
+    app.trigger = MagicMock()
+    app.trigger.is_tap_enabled.return_value = True
+    app.worker = MagicMock()
+    app.worker.failed_count.return_value = 0
+    app.status_item = MagicMock()
+    app._last_hotkey_issue = None
+    app._last_outcome_issue = "dictation rejected — too_short"
+    app.last_paste_status = None
+
+    app._poll_status(None)
+
+    assert app.status_item.title == "Status: dictation rejected — too_short"

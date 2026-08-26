@@ -22,10 +22,13 @@ a character, so there is nothing to consume.
 
 import threading
 import time
+import logging
 
 import Quartz
 
 from local_dictation import config
+
+log = logging.getLogger(__name__)
 
 
 class FnTapTrigger:
@@ -43,8 +46,14 @@ class FnTapTrigger:
         self._last_toggle_at = 0.0
 
     def start(self) -> None:
-        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread = threading.Thread(target=self._run_guarded, daemon=True)
         self._thread.start()
+
+    def _run_guarded(self) -> None:
+        try:
+            self._run()
+        except Exception as error:
+            log.warning("trigger_runtime_failed backend=fn error_type=%s", type(error).__name__)
 
     def stop(self) -> None:
         if self._run_loop is not None:
@@ -174,8 +183,14 @@ class ComboTrigger:
         self._last_toggle_at = 0.0
 
     def start(self) -> None:
-        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread = threading.Thread(target=self._run_guarded, daemon=True)
         self._thread.start()
+
+    def _run_guarded(self) -> None:
+        try:
+            self._run()
+        except Exception as error:
+            log.warning("trigger_runtime_failed backend=combo error_type=%s", type(error).__name__)
 
     def stop(self) -> None:
         if self._run_loop is not None:

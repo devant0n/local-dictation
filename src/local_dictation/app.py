@@ -66,6 +66,7 @@ class DictationApp(rumps.App):
         self._idle_timer: rumps.Timer | None = None
         self._last_activity_time: float = 0  # timestamp of last transcription submit
         self._last_hotkey_issue: str | None = None
+        self._last_outcome_issue: str | None = None
         self.hud = Hud()
 
         self.status_item = rumps.MenuItem("Status: starting…")
@@ -90,6 +91,7 @@ class DictationApp(rumps.App):
             on_recording_start=self._on_recording_start,
             on_recording_stop=self._on_recording_stop,
             on_clip_ready=self._on_clip_ready,
+            on_capture_failure=self._on_capture_failure,
             control_dispatch=lambda callback: AppHelper.callAfter(callback),
         )
         self.trigger = create_trigger(
@@ -138,12 +140,17 @@ class DictationApp(rumps.App):
         self._show_steady_state()
 
     def _on_recording_start(self, _recording_id: int) -> None:
+        self._last_outcome_issue = None
         self._cancel_flash()
         self.title = RECORDING_ICON
         self._set_stop_recording_enabled(True)
 
     def _on_recording_stop(self, _recording_id: int, _reason: str) -> None:
         self._set_stop_recording_enabled(False)
+        self._show_steady_state()
+
+    def _on_capture_failure(self, _recording_id: int, stage: str, _error_type: str) -> None:
+        self._last_outcome_issue = f"capture {stage} failed"
         self._show_steady_state()
 
     def _set_stop_recording_enabled(self, enabled: bool) -> None:
@@ -249,13 +256,15 @@ class DictationApp(rumps.App):
                 message="Your dictation is on the clipboard; paste it manually.",
             )
 
-    def _on_rejected(self) -> None:
+    def _on_rejected(self, reason: str) -> None:
         # Frequent (accidental/short toggles), not actionable beyond "try again" -- a
         # flash is enough, a notification would be disproportionate.
+        self._last_outcome_issue = f"dictation rejected — {reason}"
         self._flash(NO_SPEECH_ICON)
         self._reset_idle_timer()
 
-    def _on_failure(self, error: str) -> None:
+    def _on_failure(self, stage: str, _error_type: str) -> None:
+        self._last_outcome_issue = f"transcription {stage} failed"
         self._show_steady_state()
         rumps.notification(title="local-dictation", subtitle="Transcription failed",
                            message="Retry or discard the retained recording from the menu.")
@@ -309,6 +318,8 @@ class DictationApp(rumps.App):
             self.status_item.title = "Status: grant Input Monitoring (trigger off)"
         elif self.worker.failed_count():
             self.status_item.title = "Status: transcription failed — retry available"
+        elif self._last_outcome_issue is not None:
+            self.status_item.title = f"Status: {self._last_outcome_issue}"
         elif self._last_hotkey_issue is not None:
             self.status_item.title = f"Status: {self._last_hotkey_issue}"
         elif self.last_paste_status is None:

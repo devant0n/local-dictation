@@ -111,6 +111,9 @@ Diagnostics are written to `~/Library/Logs/local-dictation/local-dictation.log` 
 `LOCAL_DICTATION_LOG_DIR`) and mirrored to stderr. They rotate at 1 MiB with two backups (3 MiB
 total), correlate one recording's capture/transcription/paste lifecycle, and never include dictated
 text, clipboard content, raw audio, raw OS command output, exception tracebacks, or executable paths.
+Every terminal outcome records a content-free reason or failure stage. Capture records duration,
+sample count, RMS level, callback count, and stream-status flags; rejected dictation identifies
+`empty_capture`, `too_short`, `too_quiet`, `no_segments`, or `all_segments_filtered`.
 
 Debounce and guard thresholds (`COMBO_DEBOUNCE_SECONDS`, `MIN_RECORDING_SECONDS`,
 `RMS_SILENCE_THRESHOLD`, `NO_SPEECH_PROB_THRESHOLD`, `AVG_LOGPROB_THRESHOLD`,

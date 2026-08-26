@@ -10,3 +10,7 @@ The system SHALL serialize hotkey, menu, duration-cap, and hotkey-loss stop requ
 #### Scenario: Hotkey-loss stop
 - **WHEN** the event tap becomes unavailable while recording
 - **THEN** the system closes the microphone and hands off the captured clip without waiting for the maximum recording duration
+
+#### Scenario: Capture finalization fails
+- **WHEN** microphone finalization or clip handoff raises an error
+- **THEN** the recording ends without retrying microphone work, the app reports a capture failure state, and the diagnostic log records the sanitized failure stage and error type

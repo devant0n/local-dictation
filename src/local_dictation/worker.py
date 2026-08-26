@@ -123,6 +123,19 @@ class TranscriptionWorker:
         self._failed.pop(0)
         return True
 
+    def _notify(self, callback, callback_name: str, *args) -> None:
+        """Run UI callbacks without turning their failure into another ML attempt."""
+        if callback is None:
+            return
+        try:
+            callback(*args)
+        except Exception as error:
+            log.warning(
+                "transcription_callback_failed callback=%s error_type=%s",
+                callback_name,
+                type(error).__name__,
+            )
+
     def process_pending(self) -> None:
         """Process one queued clip, if any is waiting. Call repeatedly from one thread."""
         try:
@@ -135,6 +148,7 @@ class TranscriptionWorker:
                  retry_count: int = 0, recording_id: int | None = None) -> None:
         self._is_processing = True
         started = time.monotonic()
+        stage = "model_reload" if not self._warmed_up else "inference"
         log.info(
             "transcription_started recording_id=%s attempt=%d",
             recording_id,
@@ -143,24 +157,34 @@ class TranscriptionWorker:
         try:
             # If model was unloaded (after idle timeout), reload it with a UI cue
             if not self._warmed_up:
-                if self.on_reloading:
-                    self.on_reloading()
+                self._notify(self.on_reloading, "on_reloading")
                 self.warm_up()
 
-            if self.on_transcribing:
-                self.on_transcribing()
+            self._notify(self.on_transcribing, "on_transcribing")
 
+            stage = "inference"
             result = transcribe_full(audio)
 
-            text = filters.accepted_text(audio, result)
-            if text is None:
-                log.info("transcription_rejected recording_id=%s", recording_id)
-                if self.on_rejected:
-                    self.on_rejected()
+            stage = "filter"
+            decision = filters.evaluate_transcription(audio, result)
+            if decision.text is None:
+                log.info(
+                    "transcription_rejected recording_id=%s reason=%s duration_seconds=%.3f "
+                    "sample_count=%d rms=%.6f segment_count=%d accepted_segment_count=%d",
+                    recording_id,
+                    decision.rejection_reason,
+                    decision.metrics.duration_seconds,
+                    decision.metrics.sample_count,
+                    decision.metrics.rms,
+                    decision.segment_count,
+                    decision.accepted_segment_count,
+                )
+                self._notify(self.on_rejected, "on_rejected", decision.rejection_reason)
                 return
 
             language = result["language"]
-            paste_status = paste.paste(text, frontmost_app_at_stop, recording_id=recording_id)
+            stage = "paste"
+            paste_status = paste.paste(decision.text, frontmost_app_at_stop, recording_id=recording_id)
             log.info(
                 "transcription_completed recording_id=%s language=%s elapsed_seconds=%.3f paste_status=%s",
                 recording_id,
@@ -169,25 +193,25 @@ class TranscriptionWorker:
                 paste_status,
             )
 
-            if self.on_result:
-                self.on_result(language, text, paste_status)
+            self._notify(self.on_result, "on_result", language, decision.text, paste_status)
         except Exception as error:
             if retry_count == 0:
                 log.warning(
-                    "transcription_failed recording_id=%s attempt=1 error_type=%s retrying=true",
+                    "transcription_failed recording_id=%s stage=%s attempt=1 error_type=%s retrying=true",
                     recording_id,
+                    stage,
                     type(error).__name__,
                 )
                 self._process(audio, frontmost_app_at_stop, retry_count=1, recording_id=recording_id)
             else:
                 log.warning(
-                    "transcription_failed recording_id=%s attempt=%d error_type=%s retained=true",
+                    "transcription_failed recording_id=%s stage=%s attempt=%d error_type=%s retained=true",
                     recording_id,
+                    stage,
                     retry_count + 1,
                     type(error).__name__,
                 )
                 self._failed.append((audio, frontmost_app_at_stop, recording_id))
-                if self.on_failure:
-                    self.on_failure(type(error).__name__)
+                self._notify(self.on_failure, "on_failure", stage, type(error).__name__)
         finally:
             self._is_processing = False

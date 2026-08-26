@@ -13,3 +13,9 @@
 
 - [x] 3.1 Add deterministic tests for event-tap dispatch, tap-loss finalization, menu stop, serialized stops, and menu state.
 - [x] 3.2 Add diagnostics and retention regression tests, then run OpenSpec validation, focused tests, the unit suite, and Ruff.
+
+## 4. Complete terminal diagnostics
+
+- [x] 4.1 Record capture metrics and stream-status summaries, and report start, stop, handoff, and duplicate-stop failures through correlated content-free records.
+- [x] 4.2 Return explicit filtering rejection reasons; record operational stage/error categories without retrying UI callback failures; surface the latest non-success outcome in status.
+- [x] 4.3 Add privacy regression tests for all terminal outcomes, update diagnostics documentation, and run the full automated and real-fixture suites.

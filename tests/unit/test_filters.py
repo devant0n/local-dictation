@@ -176,6 +176,30 @@ def test_accepted_text_keeps_good_long_segments():
     ]}
     assert filters.accepted_text(audio, result) == "first sentence last sentence"
 
+
+@pytest.mark.parametrize(
+    ("audio", "reason"),
+    [
+        (np.array([], dtype=np.float32), "empty_capture"),
+        (np.ones(int(16_000 * 0.2), dtype=np.float32) * 0.5, "too_short"),
+        (np.ones(16_000, dtype=np.float32) * 0.001, "too_quiet"),
+    ],
+)
+def test_evaluate_transcription_explains_capture_rejections(audio, reason):
+    decision = filters.evaluate_transcription(audio, {"segments": []})
+
+    assert decision.text is None
+    assert decision.rejection_reason == reason
+    assert decision.metrics.sample_count == audio.size
+
+
+def test_evaluate_transcription_explains_missing_or_filtered_segments():
+    audio = np.ones(16_000, dtype=np.float32) * 0.5
+
+    assert filters.evaluate_transcription(audio, {"segments": []}).rejection_reason == "no_segments"
+    decision = filters.evaluate_transcription(audio, {"segments": [{"text": "", "no_speech_prob": 0.0}]})
+    assert decision.rejection_reason == "all_segments_filtered"
+
     def test_silent_audio_rejected(self):
         """Silent audio should be rejected."""
         samples = int(16_000 * 1.0)

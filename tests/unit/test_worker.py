@@ -230,13 +230,13 @@ def test_processing_state_set_during_process():
 
 def test_worker_retries_once_and_retains_failed_audio():
     failures = []
-    w = TranscriptionWorker(on_failure=failures.append)
+    w = TranscriptionWorker(on_failure=lambda stage, error_type: failures.append((stage, error_type)))
     w._warmed_up = True
     audio = np.ones(1000, dtype=np.float32)
     with mock.patch('local_dictation.worker.transcribe_full', side_effect=RuntimeError("boom")):
         w.submit(audio, None)
         w.process_pending()
-    assert len(failures) == 1
+    assert failures == [("inference", "RuntimeError")]
     assert w.failed_count() == 1
     assert w.retry_failed()
     assert w.has_pending()
@@ -253,6 +253,39 @@ def test_failed_transcription_log_is_sanitized_and_correlated(caplog):
 
     messages = [record.message for record in caplog.records]
     assert any("recording_id=7" in message for message in messages)
+    assert all("secret" not in message and "/path" not in message for message in messages)
+
+
+def test_rejection_log_includes_metrics_and_reason_without_text(caplog):
+    w = TranscriptionWorker()
+    w._warmed_up = True
+    audio = np.ones(int(16_000 * 0.2), dtype=np.float32) * 0.5
+    with mock.patch("local_dictation.worker.transcribe_full", return_value={"segments": []}), \
+         caplog.at_level(logging.INFO, logger="local_dictation.worker"):
+        w.submit(audio, None, recording_id=7)
+        w.process_pending()
+
+    message = next(record.message for record in caplog.records if "transcription_rejected" in record.message)
+    assert "recording_id=7" in message
+    assert "reason=too_short" in message
+    assert "sample_count=3200" in message
+    assert "rms=0.500000" in message
+
+
+def test_callback_failure_is_logged_without_a_second_inference_attempt(caplog):
+    result = {"language": "en", "segments": [{"text": "safe", "no_speech_prob": 0.01,
+                                                   "avg_logprob": -0.1, "compression_ratio": 1.0}]}
+    w = TranscriptionWorker(on_result=mock.Mock(side_effect=RuntimeError("secret /path")))
+    w._warmed_up = True
+    with mock.patch("local_dictation.worker.transcribe_full", return_value=result) as transcribe, \
+         mock.patch("local_dictation.worker.paste.paste", return_value="PASTED"), \
+         caplog.at_level(logging.INFO, logger="local_dictation.worker"):
+        w.submit(np.ones(16_000, dtype=np.float32) * 0.5, None, recording_id=7)
+        w.process_pending()
+
+    assert transcribe.call_count == 1
+    messages = [record.message for record in caplog.records]
+    assert any("transcription_callback_failed callback=on_result error_type=RuntimeError" in message for message in messages)
     assert all("secret" not in message and "/path" not in message for message in messages)
 
 

@@ -25,6 +25,7 @@ class DictationController:
         on_recording_start=None,
         on_recording_stop=None,
         on_clip_ready=None,
+        on_capture_failure=None,
         control_dispatch=None,
     ):
         self.recorder = Recorder()
@@ -34,6 +35,7 @@ class DictationController:
         self.on_recording_start = on_recording_start
         self.on_recording_stop = on_recording_stop
         self.on_clip_ready = on_clip_ready
+        self.on_capture_failure = on_capture_failure
         self._control_dispatch = control_dispatch or (lambda callback: callback())
 
     @property
@@ -82,6 +84,7 @@ class DictationController:
     def stop(self, reason: str) -> bool:
         """Finalize an active recording once, regardless of which stop source won."""
         if not self._recording:
+            log.info("recording_stop_ignored reason=%s state=inactive", reason)
             return False
 
         recording_id = self._recording_id
@@ -95,11 +98,45 @@ class DictationController:
             reason,
             duration_seconds,
         )
-        audio = self.recorder.stop()
+        try:
+            audio = self.recorder.stop()
+        except Exception as error:
+            log.warning(
+                "recording_capture_failed recording_id=%d stage=capture error_type=%s",
+                recording_id,
+                type(error).__name__,
+            )
+            if self.on_recording_stop:
+                self.on_recording_stop(recording_id, reason)
+            if self.on_capture_failure:
+                self.on_capture_failure(recording_id, "capture", type(error).__name__)
+            return False
+
+        capture = getattr(self.recorder, "last_capture_diagnostics", {})
+        log.info(
+            "recording_captured recording_id=%d duration_seconds=%.3f sample_count=%d "
+            "rms=%.6f callback_count=%d stream_status_flags=%s",
+            recording_id,
+            duration_seconds,
+            int(audio.size),
+            float((audio ** 2).mean() ** 0.5) if audio.size else 0.0,
+            int(capture.get("callback_count", 0)),
+            ",".join(capture.get("stream_status_flags", ())) or "none",
+        )
         if self.on_recording_stop:
             self.on_recording_stop(recording_id, reason)
         if self.on_clip_ready:
-            self.on_clip_ready(audio, recording_id, reason)
+            try:
+                self.on_clip_ready(audio, recording_id, reason)
+            except Exception as error:
+                log.warning(
+                    "recording_capture_failed recording_id=%d stage=handoff error_type=%s",
+                    recording_id,
+                    type(error).__name__,
+                )
+                if self.on_capture_failure:
+                    self.on_capture_failure(recording_id, "handoff", type(error).__name__)
+                return False
         log.info("recording_stopped recording_id=%d reason=%s", recording_id, reason)
         return True
 
@@ -122,7 +159,7 @@ def main() -> None:
     worker = TranscriptionWorker(
         on_transcribing=lambda: print("transcribing..."),
         on_result=on_result,
-        on_rejected=lambda: print("(no speech detected, nothing pasted)"),
+        on_rejected=lambda reason: print(f"(dictation rejected: {reason})"),
     )
     worker.warm_up()
 
