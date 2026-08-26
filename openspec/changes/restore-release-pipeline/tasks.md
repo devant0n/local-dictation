@@ -1,12 +1,12 @@
 ## 1. Release workflow runtime
 
-- [ ] 1.1 Replace the Python Semantic Release Docker action with Python 3.13, uv, locked `dev` dependencies, and the CLI invocation using `GH_TOKEN` from `RELEASE_PAT`.
-- [ ] 1.2 Add a default-safe manual `workflow_dispatch` dry-run path while preserving automatic `fix:`/`feat:` release gating and existing permissions.
+- [x] 1.1 Replace the Python Semantic Release Docker action with Python 3.13, uv, locked `dev` dependencies, and the CLI invocation using `GH_TOKEN` from `RELEASE_PAT`.
+- [x] 1.2 Add a default-safe manual `workflow_dispatch` dry-run path while preserving automatic `fix:`/`feat:` release gating and existing permissions.
 
 ## 2. Regression coverage
 
-- [ ] 2.1 Add a fast workflow-contract test for release triggers, lockfile installation, CLI invocation, token wiring, and dry-run safeguards.
-- [ ] 2.2 Run unit tests, Ruff, package build, strict OpenSpec validation, and local no-op Semantic Release.
+- [x] 2.1 Add a fast workflow-contract test for release triggers, lockfile installation, CLI invocation, token wiring, and dry-run safeguards.
+- [x] 2.2 Run unit tests, Ruff, package build, strict OpenSpec validation, and local no-op Semantic Release.
 
 ## 3. End-to-end verification
 
